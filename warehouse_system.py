@@ -183,110 +183,51 @@ def put_warehouse():
     confirm = messagebox.askyesno("Confirm", f"Put {len(staged_items)} item(s) to warehouse?")
     if not confirm:
         return
-    
-    df_items = load_items()
-    df_shelves = load_shelves()
-    QR_FOLDER = "qr_codes"
-    
-    if not os.path.exists(QR_FOLDER):
-        os.makedirs(QR_FOLDER)
-    
-    # Add all staged items to database
-    for item in staged_items:
-        qr_code = str(uuid.uuid4())
-        qr_img = qrcode.make(qr_code)
-        safe_hostname = item['Hostname'].replace(" ", "_")
-        qr_path = os.path.join(QR_FOLDER, f"{safe_hostname}.png")
-        qr_img.save(qr_path)
-        
-        new_row = {
-            "QR": qr_code,
-            "Hostname": item['Hostname'],
-            "Shelf": item['Shelf'],
-            "Remarks": item['Remarks'],
-            "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        
-        df_items = pd.concat([df_items, pd.DataFrame([new_row])], ignore_index=True)
-    
-    save_all(df_items, df_shelves)
-    
-    count = len(staged_items)
-    staged_items.clear()
-    messagebox.showinfo("Success", f"{count} item(s) added to warehouse")
-    
-    update_staged_display()
-    refresh_all()
 
-def remove_from_staging():
-    if not staged_items:
-        messagebox.showinfo("Info", "No staged items to remove")
-        return
-    
-    # Create a simple selection window
-    remove_window = tk.Toplevel(root)
-    remove_window.title("Remove from Staging")
-    remove_window.geometry("300x400")
-    
-    tk.Label(remove_window, text="Select items to remove:", font=("Arial", 10, "bold")).pack(pady=10)
-    
-    # Create listbox with hostnames
-    listbox = tk.Listbox(remove_window, selectmode=tk.MULTIPLE, height=12)
-    listbox.pack(fill="both", expand=True, padx=10, pady=5)
-    
-    for i, item in enumerate(staged_items):
-        listbox.insert(tk.END, f"{i+1}. {item['Hostname']} ({item['Shelf']})")
-    
-    def remove_selected():
-        selections = listbox.curselection()
-        if not selections:
-            messagebox.showwarning("Warning", "Please select item(s) to remove")
-            return
+    try:
+        df_items = load_items()
+        df_shelves = load_shelves()
+        QR_FOLDER = "qr_codes"
         
-        # Remove in reverse order to maintain indices
-        for index in reversed(selections):
-            staged_items.pop(index)
+        if not os.path.exists(QR_FOLDER):
+            os.makedirs(QR_FOLDER)
+
+        # Add all staged items
+        for item in staged_items:
+            qr_code = str(uuid.uuid4())
+            qr_img = qrcode.make(qr_code)
+            safe_hostname = item['Hostname'].replace(" ", "_")
+            qr_path = os.path.join(QR_FOLDER, f"{safe_hostname}.png")
+            qr_img.save(qr_path)
+            
+            new_row = {
+                "QR": qr_code,
+                "Hostname": item['Hostname'],
+                "Shelf": item['Shelf'],
+                "Remarks": item['Remarks'],
+                "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            df_items = pd.concat([df_items, pd.DataFrame([new_row])], ignore_index=True)
+
+        # ← This is where the actual save happens
+        save_all(df_items, df_shelves)
         
-        messagebox.showinfo("Success", f"Removed {len(selections)} item(s) from staging")
-        update_staged_display()
-        remove_window.destroy()
-    
-    def clear_all_staging():
-        confirm = messagebox.askyesno("Confirm", f"Clear all {len(staged_items)} staged items?")
-        if not confirm:
-            return
-        
+        count = len(staged_items)
         staged_items.clear()
-        messagebox.showinfo("Cleared", "Staging queue cleared")
+        
+        messagebox.showinfo("Success", f"{count} item(s) added to warehouse")
+        
         update_staged_display()
-        remove_window.destroy()
-    
-    button_frame = tk.Frame(remove_window)
-    button_frame.pack(pady=10)
-    
-    tk.Button(button_frame, text="Remove Selected", command=remove_selected, bg="red", fg="white").pack(side="left", padx=5)
-    tk.Button(button_frame, text="Clear All", command=clear_all_staging, bg="orange", fg="white").pack(side="left", padx=5)
+        refresh_all()
 
-def pull_item():
-    selected = tree_warehouse.selection()
-    if not selected:
-        messagebox.showerror("Error", "Select item to pull")
-        return
-    confirm = messagebox.askyesno("Confirm", "Pull this item?")
-    if not confirm:
-        return
-
-    df_items = load_items()
-    index = tree_warehouse.index(selected[0])
-    df_items = df_items.drop(index).reset_index(drop=True)
-
-    df_shelves = load_shelves()
-    save_all(df_items, df_shelves)
-
-    messagebox.showinfo("Success", "Item removed (Pulled)")
-    refresh_all()
-
-
+    except Exception as e:
+        messagebox.showerror("Save Error", f"Failed to save to Excel:\n{str(e)}\n\n"
+                                          "Common causes:\n"
+                                          "• Excel file is open → close it\n"
+                                          "• Wrong folder (check working directory)")
+        print("DEBUG ERROR:", e)  # ← shows full traceback in console
+     
 def update_item():
     global selected_staged_index
 
@@ -707,9 +648,10 @@ warehousing_frame.pack(fill="x", pady=10)
 
 tk.Button(warehousing_frame, text="PUT WAREHOUSE", command=put_warehouse, width=20).pack(side="left", padx=10, pady=5)
 
-tk.Button(warehousing_frame, text="CLEAR ITEMS", command=remove_from_staging, width=20).pack(side="left", padx=10, pady=5)
-
-tk.Button(warehousing_frame, text="PULL ITEM", command=pull_item, width=20).pack(side="left", padx=10, pady=5)
+# PENDING FUNCTION
+# tk.Button(warehousing_frame, text="CLEAR ITEMS", command=remove_from_staging, width=20).pack(side="left", padx=10, pady=5)
+#PENDING FUNCTION
+# tk.Button(warehousing_frame, text="PULL ITEM", command=pull_item, width=20).pack(side="left", padx=10, pady=5)
 
 tk.Button(warehousing_frame, text="DELETE ITEM", command=delete_item, width=20).pack(side="left", padx=10, pady=5)
 
