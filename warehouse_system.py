@@ -67,6 +67,7 @@ initialize_file()
 
 # ========== STAGING LIST ==========
 staged_items = []  # List to hold items before committing to warehouse
+selected_staged_index = None  # Track selected staged item
 
 # ========== LOAD / SAVE FUNCTIONS ==========
 
@@ -101,15 +102,32 @@ def update_full_shelves_display():
     full_label.config(text=text)
 
 def update_staged_display():
+    staged_listbox.delete(0, tk.END)
+
     if not staged_items:
-        staged_label.config(text="Staged Items: None")
+        staged_listbox.insert(tk.END, "No staged items")
         return
-    
-    text = "Staged Items (Ready to PUT):\n"
-    for i, item in enumerate(staged_items, 1):
-        text += f"  {i}. {item['Hostname']} → {item['Shelf']}\n"
-    
-    staged_label.config(text=text)
+
+    for item in staged_items:
+        staged_listbox.insert(tk.END, f"{item['Hostname']} → {item['Shelf']} → {item['Remarks']}")
+
+def select_staged_item(event):
+    global selected_staged_index
+
+    selection = staged_listbox.curselection()
+    if not selection:
+        return
+
+    index = selection[0]
+    selected_staged_index = index  # ← STORE selection
+
+    item = staged_items[index]
+
+    hostname_entry.delete(0, tk.END)
+    hostname_entry.insert(0, item["Hostname"])
+    shelf_var.set(item["Shelf"])
+    remarks_var.set(item["Remarks"])
+
 # ========== CORE FUNCTIONS ==========
 
 def put_item():
@@ -270,25 +288,52 @@ def pull_item():
 
 
 def update_item():
-    selected = tree_warehouse.selection()
-    if not selected:
-        messagebox.showerror("Error", "Select item to update")
-        return
-    
+    global selected_staged_index
+
     new_hostname = hostname_entry.get().strip()
-    
+
     if not new_hostname:
         messagebox.showerror("Error", "Hostname cannot be empty")
         return
-    
+
+    selected = tree_warehouse.selection()
+
+    # ===== PRIORITY: STAGED ITEM UPDATE =====
+    if selected_staged_index is not None:
+        index = selected_staged_index
+
+        if index >= len(staged_items):
+            messagebox.showerror("Error", "Invalid staged selection")
+            selected_staged_index = None
+            return
+
+        # Prevent duplicate in staging
+        if any(i != index and item['Hostname'] == new_hostname for i, item in enumerate(staged_items)):
+            messagebox.showerror("Error", "Hostname already exists in staging")
+            return
+
+        # Update staged item
+        staged_items[index]["Hostname"] = new_hostname
+        staged_items[index]["Shelf"] = shelf_var.get()
+        staged_items[index]["Remarks"] = remarks_var.get()
+
+        messagebox.showinfo("Updated", "Staged item updated")
+
+        update_staged_display()
+        selected_staged_index = None
+        return
+
+    # ===== WAREHOUSE UPDATE =====
+    if not selected:
+        messagebox.showerror("Error", "Select item to update")
+        return
+
     df_items = load_items()
     df_shelves = load_shelves()
     index = tree_warehouse.index(selected[0])
-    
-    # Get the current hostname of the selected item
+
     current_hostname = df_items.at[index, "Hostname"]
-    
-    # Check if new hostname already exists (but allow the same hostname for the current item)
+
     if new_hostname != current_hostname and new_hostname in df_items["Hostname"].values:
         messagebox.showerror("Error", "Hostname already exists and has a QR assigned")
         return
@@ -298,8 +343,10 @@ def update_item():
     df_items.at[index, "Remarks"] = remarks_var.get()
 
     save_all(df_items, df_shelves)
+
     messagebox.showinfo("Updated", "Record updated")
     refresh_all()
+
 
 def delete_item():
     selected = tree_warehouse.selection()
@@ -578,14 +625,15 @@ crud_frame = tk.Frame(input_frame)
 crud_frame.grid(row=3, column=0, columnspan=2, pady=10)
 
 tk.Button(crud_frame, text="PUT", command=put_item, width=10).grid(row=0, column=0, padx=3)
-tk.Button(crud_frame, text="PULL", command=pull_item, width=10).grid(row=0, column=1, padx=3)
 tk.Button(crud_frame, text="UPDATE", command=update_item, width=10).grid(row=0, column=2, padx=3)
-tk.Button(crud_frame, text="DELETE", command=delete_item, width=10).grid(row=0, column=3, padx=3)
 tk.Button(crud_frame, text="↻", command=reset_ui, width=3).grid(row=0, column=4, padx=3)
 
 # Staged Items Indicator
-staged_label = tk.Label(input_frame, text="Staged Items: None", fg="green", font=("Arial", 9, "bold"))
-staged_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=10)
+tk.Label(input_frame, text="Staged Items (Click to Edit)", fg="green", font=("Arial", 9, "bold")).grid(row=4, column=0, columnspan=2, sticky="w")
+
+staged_listbox = tk.Listbox(input_frame, height=6)
+staged_listbox.grid(row=5, column=0, columnspan=2, sticky="we", pady=5)
+staged_listbox.bind("<<ListboxSelect>>", select_staged_item)
 
 # ================= RIGHT: SEARCH PANEL =================
 search_frame = tk.LabelFrame(top_frame, text="Search", padx=10, pady=10)
@@ -612,7 +660,7 @@ view_frame.pack(side="right", fill="both", expand=False, padx=5)
 tk.Button(view_frame, text="Show Warehouse", command=show_warehouse, width=15)\
     .pack(side="left", padx=5)
 
-tk.Button(view_frame, text="Show Available", command=show_available, width=15)\
+tk.Button(view_frame, text="Shelf Status", command=show_available, width=15)\
     .pack(side="left", padx=5)
 
 # ===== MIDDLE SECTION =====
@@ -657,9 +705,15 @@ tk.Button(add_frame, text="Remove", command=remove_shelf).pack(side="left", padx
 warehousing_frame = tk.LabelFrame(main_frame, text="Warehousing", padx=10, pady=10)
 warehousing_frame.pack(fill="x", pady=10)
 
-tk.Button(warehousing_frame, text="PUT WAREHOUSE", command=put_warehouse, width=20, bg="green", fg="white").pack(side="left", padx=10, pady=5)
+tk.Button(warehousing_frame, text="PUT WAREHOUSE", command=put_warehouse, width=20).pack(side="left", padx=10, pady=5)
 
-tk.Button(warehousing_frame, text="CLEAR ITEMS", command=remove_from_staging, width=20, bg="orange", fg="white").pack(side="left", padx=10, pady=5)
+tk.Button(warehousing_frame, text="CLEAR ITEMS", command=remove_from_staging, width=20).pack(side="left", padx=10, pady=5)
+
+tk.Button(warehousing_frame, text="PULL ITEM", command=pull_item, width=20).pack(side="left", padx=10, pady=5)
+
+tk.Button(warehousing_frame, text="DELETE ITEM", command=delete_item, width=20).pack(side="left", padx=10, pady=5)
+
+
 
 # ===== STATUS SECTION =====
 status_frame = tk.Frame(main_frame)
