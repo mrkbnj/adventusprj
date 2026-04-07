@@ -657,9 +657,9 @@ tk.Button(add_frame, text="Remove", command=remove_shelf).pack(side="left", padx
 warehousing_frame = tk.LabelFrame(main_frame, text="Warehousing", padx=10, pady=10)
 warehousing_frame.pack(fill="x", pady=10)
 
-tk.Button(warehousing_frame, text="PUT WAREHOUSE", command=put_warehouse, width=20, bg="green", fg="white", font=("Arial", 11, "bold")).pack(side="left", padx=10, pady=5)
+tk.Button(warehousing_frame, text="PUT WAREHOUSE", command=put_warehouse, width=20, bg="green", fg="white").pack(side="left", padx=10, pady=5)
 
-tk.Button(warehousing_frame, text="Manage Staging", command=remove_from_staging, width=20, bg="orange", fg="white", font=("Arial", 10)).pack(side="left", padx=10, pady=5)
+tk.Button(warehousing_frame, text="CLEAR ITEMS", command=remove_from_staging, width=20, bg="orange", fg="white").pack(side="left", padx=10, pady=5)
 
 # ===== STATUS SECTION =====
 status_frame = tk.Frame(main_frame)
