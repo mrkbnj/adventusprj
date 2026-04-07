@@ -37,18 +37,18 @@ SHELVES = [
 
 def initialize_file():
     if not os.path.exists(FILE):
-        # Create new file with both sheets
         df_items = pd.DataFrame(columns=["QR", "Hostname", "Shelf", "Remarks", "Date"])
         df_shelves = pd.DataFrame({
             "Shelf": SHELVES,
             "Status": ["AVAILABLE"] * len(SHELVES),
             "Date_Full": [None] * len(SHELVES)
         })
+        df_pullouts = pd.DataFrame(columns=["Hostname", "Shelf", "Remarks", "Pull Reason", "Date"])
         with pd.ExcelWriter(FILE, engine='openpyxl') as writer:
             df_items.to_excel(writer, sheet_name="items", index=False)
             df_shelves.to_excel(writer, sheet_name="shelves", index=False)
+            df_pullouts.to_excel(writer, sheet_name="pullouts", index=False)
     else:
-        # File exists → ensure both sheets exist
         with pd.ExcelFile(FILE) as xls:
             sheets = xls.sheet_names
         df_items = pd.DataFrame(columns=["QR", "Hostname", "Shelf", "Remarks", "Date"])
@@ -57,13 +57,14 @@ def initialize_file():
             "Status": ["AVAILABLE"] * len(SHELVES),
             "Date_Full": [None] * len(SHELVES)
         })
+        df_pullouts = pd.DataFrame(columns=["Hostname", "Shelf", "Remarks", "Pull Reason", "Date"])
         with pd.ExcelWriter(FILE, engine='openpyxl', mode='a') as writer:
             if "items" not in sheets:
                 df_items.to_excel(writer, sheet_name="items", index=False)
             if "shelves" not in sheets:
                 df_shelves.to_excel(writer, sheet_name="shelves", index=False)
-
-initialize_file()
+            if "pullouts" not in sheets:
+                df_pullouts.to_excel(writer, sheet_name="pullouts", index=False)
 
 # ========== STAGING LIST ==========
 staged_items = []  # List to hold items before committing to warehouse
@@ -85,10 +86,77 @@ def load_shelves():
         initialize_file()
         return pd.read_excel(FILE, sheet_name="shelves")
 
-def save_all(df_items, df_shelves):
+def load_pullouts():
+    try:
+        return pd.read_excel(FILE, sheet_name="pullouts")
+    except:
+        initialize_file()
+        return pd.read_excel(FILE, sheet_name="pullouts")
+
+def show_pullouts():
+    tree_warehouse.pack_forget()
+    tree_available.pack_forget()
+    tree_pullouts.delete(*tree_pullouts.get_children())
+    tree_pullouts.pack(fill="both", expand=True)
+
+    df_pullouts = load_pullouts()
+
+    for _, row in df_pullouts.iterrows():
+        tree_pullouts.insert("", "end", values=(
+            row.get("Hostname", ""),
+            row.get("Shelf", ""),
+            row.get("Remarks", ""),
+            row.get("Pull Reason", ""),
+            row.get("Date", "")
+        ))
+
+def filter_pullouts():
+    shelf_filter = pull_shelf_var.get()
+    remarks_filter = pull_remarks_var.get()
+
+    if not shelf_filter and not remarks_filter:
+        messagebox.showinfo("Info", "Please select at least one filter")
+        return
+
+    df_items = load_items()
+
+    if shelf_filter:
+        df_items = df_items[df_items["Shelf"] == shelf_filter]
+    if remarks_filter:
+        df_items = df_items[df_items["Remarks"] == remarks_filter]
+
+    # Switch to warehouse view
+    tree_available.pack_forget()
+    tree_pullouts.pack_forget()
+    tree_warehouse.delete(*tree_warehouse.get_children())
+    tree_warehouse.pack(fill="both", expand=True)
+
+    for _, row in df_items.iterrows():
+        tree_warehouse.insert("", "end", values=(
+            row.get("QR", ""),
+            row.get("Hostname", ""),
+            row.get("Shelf", ""),
+            row.get("Remarks", ""),
+            row.get("Date", "")
+        ))
+
+    search_label.config(text=f"Filtered: {len(df_items)} item(s) "
+                             f"{'| Shelf: ' + shelf_filter if shelf_filter else ''} "
+                             f"{'| Remarks: ' + remarks_filter if remarks_filter else ''}")
+
+def clear_pull_filters():
+    pull_shelf_var.set("")
+    pull_remarks_var.set("")
+    search_label.config(text="")
+    show_warehouse()
+
+def save_all(df_items, df_shelves, df_pullouts=None):
+    if df_pullouts is None:
+        df_pullouts = load_pullouts()
     with pd.ExcelWriter(FILE, engine='openpyxl') as writer:
         df_items.to_excel(writer, sheet_name="items", index=False)
         df_shelves.to_excel(writer, sheet_name="shelves", index=False)
+        df_pullouts.to_excel(writer, sheet_name="pullouts", index=False)
 
 def update_full_shelves_display():
     df_shelves = load_shelves()
@@ -129,6 +197,49 @@ def select_staged_item(event):
     remarks_var.set(item["Remarks"])
 
 # ========== CORE FUNCTIONS ==========
+def remove_from_staging():
+    global selected_staged_index
+
+    # If a specific staged item is selected, remove just that one
+    if selected_staged_index is not None:
+        index = selected_staged_index
+
+        if index >= len(staged_items):
+            messagebox.showerror("Error", "Invalid staged selection")
+            selected_staged_index = None
+            return
+
+        removed = staged_items.pop(index)
+        messagebox.showinfo("Removed", f"'{removed['Hostname']}' removed from staging")
+
+        selected_staged_index = None
+
+        # Clear input fields
+        hostname_entry.delete(0, tk.END)
+        shelf_var.set("")
+        remarks_var.set("")
+
+        update_staged_display()
+        return
+
+    # If nothing is selected, ask to clear all staged items
+    if not staged_items:
+        messagebox.showinfo("Info", "No staged items to clear")
+        return
+
+    confirm = messagebox.askyesno("Confirm", f"Clear all {len(staged_items)} staged item(s)?")
+    if not confirm:
+        return
+
+    staged_items.clear()
+    selected_staged_index = None
+
+    hostname_entry.delete(0, tk.END)
+    shelf_var.set("")
+    remarks_var.set("")
+
+    messagebox.showinfo("Cleared", "All staged items cleared")
+    update_staged_display()
 
 def put_item():
     hostname = hostname_entry.get().strip()
@@ -417,6 +528,7 @@ def show_warehouse():
 
 def show_available():
     tree_warehouse.pack_forget()
+    tree_pullouts.pack_forget()          # ← add this line
     tree_available.delete(*tree_available.get_children())
     tree_available.pack(fill="both", expand=True)
     
@@ -440,6 +552,7 @@ def update_shelf_dropdown():
     shelf_dropdown["values"] = shelf_list
     shelf_control_dropdown["values"] = shelf_list
     remove_shelf_dropdown["values"] = shelf_list
+    pull_shelf_dropdown["values"] = shelf_list
 
 def select_item(event):
     selected = tree_warehouse.selection()
@@ -449,6 +562,10 @@ def select_item(event):
         hostname_entry.insert(0, values[1])
         shelf_var.set(values[2])
         remarks_var.set(values[3])
+
+        # Auto-fill pull out segment
+        pull_item_entry.delete(0, tk.END)
+        pull_item_entry.insert(0, values[1])
 
 def search_item():
     keyword = search_entry.get().strip().lower()
@@ -463,6 +580,7 @@ def search_item():
     filtered = df_items[df_items["Hostname"].str.lower().str.contains(keyword, na=False)]
 
     tree_available.pack_forget()
+    tree_pullouts.pack_forget()          # ← add this line
     tree_warehouse.pack(fill="both", expand=True)
     tree_warehouse.delete(*tree_warehouse.get_children())
     for _, row in filtered.iterrows():
@@ -523,6 +641,68 @@ def remove_shelf():
     messagebox.showinfo("Success", f"Shelf '{shelf_name}' removed")
     remove_shelf_var.set("")
     update_shelf_dropdown()
+
+def pull_item():
+    hostname = pull_item_entry.get().strip()
+    reason = pull_reason_entry.get().strip()
+
+    if not hostname:
+        messagebox.showerror("Error", "No item selected for pull out")
+        return
+
+    if not reason:
+        messagebox.showerror("Error", "Please enter a pull reason")
+        return
+
+    df_items = load_items()
+    df_shelves = load_shelves()
+    df_pullouts = load_pullouts()
+
+    # Check item exists in warehouse
+    match = df_items[df_items["Hostname"] == hostname]
+    if match.empty:
+        messagebox.showerror("Error", f"'{hostname}' not found in warehouse")
+        return
+
+    confirm = messagebox.askyesno("Confirm Pull Out", f"Pull out '{hostname}' from warehouse?\nReason: {reason}")
+    if not confirm:
+        return
+
+    # Get item details before removing
+    item_row = match.iloc[0]
+    shelf = item_row["Shelf"]
+    remarks = item_row["Remarks"]
+
+    # Delete QR file
+    safe_hostname = hostname.replace(" ", "_")
+    qr_path = os.path.join("qr_codes", f"{safe_hostname}.png")
+    if os.path.exists(qr_path):
+        try:
+            os.remove(qr_path)
+        except Exception as e:
+            messagebox.showwarning("Warning", f"QR file not deleted: {e}")
+
+    # Remove from items
+    df_items = df_items[df_items["Hostname"] != hostname].reset_index(drop=True)
+
+    # Log to pullouts
+    new_pullout = {
+        "Hostname": hostname,
+        "Shelf": shelf,
+        "Remarks": remarks,
+        "Pull Reason": reason,
+        "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    df_pullouts = pd.concat([df_pullouts, pd.DataFrame([new_pullout])], ignore_index=True)
+
+    save_all(df_items, df_shelves, df_pullouts)
+
+    messagebox.showinfo("Success", f"'{hostname}' pulled out successfully")
+
+    # Clear pull fields
+    pull_item_entry.delete(0, tk.END)
+    pull_reason_entry.delete(0, tk.END)
+
     refresh_all()
 
 # ========== UI SETUP ==========
@@ -576,6 +756,9 @@ staged_listbox = tk.Listbox(input_frame, height=6)
 staged_listbox.grid(row=5, column=0, columnspan=2, sticky="we", pady=5)
 staged_listbox.bind("<<ListboxSelect>>", select_staged_item)
 
+tk.Button(input_frame, text="CLEAR ITEMS", command=remove_from_staging, width=20).grid(row=6, column=0, columnspan=2, pady=5)
+tk.Button(input_frame, text="PUT WAREHOUSE", command=put_warehouse, width=20).grid(row=7, column=0, columnspan=2, pady=5)
+
 # ================= RIGHT: SEARCH PANEL =================
 search_frame = tk.LabelFrame(top_frame, text="Search", padx=10, pady=10)
 search_frame.pack(side="right", fill="both", expand=True, padx=5)
@@ -625,6 +808,9 @@ tk.Button(shelf_control, text="SET AVAILABLE",
           command=lambda: set_shelf_status("AVAILABLE"), width=12)\
     .pack(side="left", padx=5)
 
+tk.Button(view_frame, text="Pull History", command=show_pullouts, width=15)\
+    .pack(side="left", padx=5)
+
 # Add Shelf
 add_frame = tk.LabelFrame(middle_frame, text="Add/Remove Shelf", padx=10, pady=10)
 add_frame.pack(side="left", fill="x", expand=True, padx=5)
@@ -642,18 +828,51 @@ remove_shelf_dropdown.pack(side="left", padx=5)
 
 tk.Button(add_frame, text="Remove", command=remove_shelf).pack(side="left", padx=2)
 
+# ===== PULL OUT SECTION =====
+pullout_frame = tk.LabelFrame(main_frame, text="Pull Out", padx=10, pady=10)
+pullout_frame.pack(fill="x", pady=5)
+
+# Row 0 - Selected Item and Pull Reason
+tk.Label(pullout_frame, text="Selected Item:").grid(row=0, column=0, sticky="w", padx=5)
+pull_item_entry = tk.Entry(pullout_frame, width=25)
+pull_item_entry.grid(row=0, column=1, padx=5, pady=3)
+
+tk.Label(pullout_frame, text="Pull Reason:").grid(row=0, column=2, sticky="w", padx=5)
+pull_reason_entry = tk.Entry(pullout_frame, width=25)
+pull_reason_entry.grid(row=0, column=3, padx=5, pady=3)
+
+# Row 1 - Filters
+tk.Label(pullout_frame, text="Filter Shelf:").grid(row=1, column=0, sticky="w", padx=5)
+pull_shelf_var = tk.StringVar()
+pull_shelf_dropdown = ttk.Combobox(pullout_frame, textvariable=pull_shelf_var, width=22, state="readonly")
+pull_shelf_dropdown.grid(row=1, column=1, padx=5, pady=3)
+
+tk.Label(pullout_frame, text="Filter Remarks:").grid(row=1, column=2, sticky="w", padx=5)
+pull_remarks_var = tk.StringVar()
+ttk.Combobox(
+    pullout_frame,
+    textvariable=pull_remarks_var,
+    values=["No Issue", "Minimal", "Defective"],
+    width=22,
+    state="readonly"
+).grid(row=1, column=3, padx=5, pady=3)
+
+# Row 2 - Buttons
+btn_frame = tk.Frame(pullout_frame)
+btn_frame.grid(row=2, column=0, columnspan=4, pady=8)
+
+tk.Button(btn_frame, text="WAREHOUSE PULL", command=pull_item, width=18).pack(side="left", padx=5)
+tk.Button(btn_frame, text="FILTER", command=filter_pullouts, width=10).pack(side="left", padx=5)
+tk.Button(btn_frame, text="↻", command=clear_pull_filters, width=3).pack(side="left", padx=5)
+
 # ===== WAREHOUSING SECTION =====
-warehousing_frame = tk.LabelFrame(main_frame, text="Warehousing", padx=10, pady=10)
-warehousing_frame.pack(fill="x", pady=10)
+# warehousing_frame = tk.LabelFrame(main_frame, text="Warehousing", padx=10, pady=10)
+# warehousing_frame.pack(fill="x", pady=10)
 
-tk.Button(warehousing_frame, text="PUT WAREHOUSE", command=put_warehouse, width=20).pack(side="left", padx=10, pady=5)
-
-# PENDING FUNCTION
-# tk.Button(warehousing_frame, text="CLEAR ITEMS", command=remove_from_staging, width=20).pack(side="left", padx=10, pady=5)
 #PENDING FUNCTION
 # tk.Button(warehousing_frame, text="PULL ITEM", command=pull_item, width=20).pack(side="left", padx=10, pady=5)
 
-tk.Button(warehousing_frame, text="DELETE ITEM", command=delete_item, width=20).pack(side="left", padx=10, pady=5)
+#tk.Button(warehousing_frame, text="DELETE ITEM", command=delete_item, width=20).pack(side="left", padx=10, pady=5)
 
 
 
@@ -696,6 +915,17 @@ tree_available = ttk.Treeview(
 tree_available.heading("Col1", text="Shelf")
 tree_available.heading("Col2", text="Status")
 tree_available.heading("Col3", text="Date_Full")
+
+tree_pullouts = ttk.Treeview(
+    table_frame,
+    columns=("Col1", "Col2", "Col3", "Col4", "Col5"),
+    show='headings'
+)
+tree_pullouts.heading("Col1", text="Hostname")
+tree_pullouts.heading("Col2", text="Shelf")
+tree_pullouts.heading("Col3", text="Remarks")
+tree_pullouts.heading("Col4", text="Pull Reason")
+tree_pullouts.heading("Col5", text="Date")
 
 # ===== INIT =====
 update_shelf_dropdown()
