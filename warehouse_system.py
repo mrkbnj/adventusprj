@@ -37,7 +37,7 @@ SHELVES = [
 
 def initialize_file():
     if not os.path.exists(FILE):
-        df_items = pd.DataFrame(columns=["QR", "Hostname", "Shelf", "Remarks", "Date"])
+        df_items = pd.DataFrame(columns=["QR", "Hostname", "Serial Number", "Checked By", "Shelf", "Remarks", "Date"])
         df_shelves = pd.DataFrame({
             "Shelf": SHELVES,
             "Status": ["AVAILABLE"] * len(SHELVES),
@@ -51,7 +51,7 @@ def initialize_file():
     else:
         with pd.ExcelFile(FILE) as xls:
             sheets = xls.sheet_names
-        df_items = pd.DataFrame(columns=["QR", "Hostname", "Shelf", "Remarks", "Date"])
+        df_items = pd.DataFrame(columns=["QR", "Hostname", "Serial Number", "Checked By", "Shelf", "Remarks", "Date"])
         df_shelves = pd.DataFrame({
             "Shelf": SHELVES,
             "Status": ["AVAILABLE"] * len(SHELVES),
@@ -125,7 +125,6 @@ def filter_pullouts():
     if remarks_filter:
         df_items = df_items[df_items["Remarks"] == remarks_filter]
 
-    # Switch to warehouse view
     tree_available.pack_forget()
     tree_pullouts.pack_forget()
     tree_warehouse.delete(*tree_warehouse.get_children())
@@ -135,6 +134,8 @@ def filter_pullouts():
         tree_warehouse.insert("", "end", values=(
             row.get("QR", ""),
             row.get("Hostname", ""),
+            row.get("Serial Number", ""),
+            row.get("Checked By", ""),
             row.get("Shelf", ""),
             row.get("Remarks", ""),
             row.get("Date", "")
@@ -147,6 +148,7 @@ def filter_pullouts():
 def clear_pull_filters():
     pull_shelf_var.set("")
     pull_remarks_var.set("")
+    search_entry.delete(0, tk.END)
     search_label.config(text="")
     show_warehouse()
 
@@ -193,6 +195,10 @@ def select_staged_item(event):
 
     hostname_entry.delete(0, tk.END)
     hostname_entry.insert(0, item["Hostname"])
+    serial_entry.delete(0, tk.END)
+    serial_entry.insert(0, item.get("Serial Number", ""))
+    checked_by_entry.delete(0, tk.END)
+    checked_by_entry.insert(0, item.get("Checked By", ""))
     shelf_var.set(item["Shelf"])
     remarks_var.set(item["Remarks"])
 
@@ -216,6 +222,8 @@ def remove_from_staging():
 
         # Clear input fields
         hostname_entry.delete(0, tk.END)
+        serial_entry.delete(0, tk.END)
+        checked_by_entry.delete(0, tk.END)
         shelf_var.set("")
         remarks_var.set("")
 
@@ -243,6 +251,8 @@ def remove_from_staging():
 
 def put_item():
     hostname = hostname_entry.get().strip()
+    serial = serial_entry.get().strip()
+    checked_by = checked_by_entry.get().strip()
     shelf = shelf_var.get()
     remarks = remarks_var.get()
 
@@ -272,6 +282,8 @@ def put_item():
     # Add to staging instead of directly saving
     new_item = {
         "Hostname": hostname,
+        "Serial Number": serial,
+        "Checked By": checked_by,
         "Shelf": shelf,
         "Remarks": remarks,
     }
@@ -281,6 +293,8 @@ def put_item():
     
     # Clear input fields
     hostname_entry.delete(0, tk.END)
+    serial_entry.delete(0, tk.END)
+    checked_by_entry.delete(0, tk.END)
     remarks_var.set("")
     shelf_var.set("")
     
@@ -298,12 +312,16 @@ def put_warehouse():
     try:
         df_items = load_items()
         df_shelves = load_shelves()
+
+        # Ensure new columns exist in loaded dataframe
+        for col in ["Serial Number", "Checked By"]:
+            if col not in df_items.columns:
+                df_items[col] = ""
+
         QR_FOLDER = "qr_codes"
-        
         if not os.path.exists(QR_FOLDER):
             os.makedirs(QR_FOLDER)
 
-        # Add all staged items
         for item in staged_items:
             qr_code = str(uuid.uuid4())
             qr_img = qrcode.make(qr_code)
@@ -314,6 +332,8 @@ def put_warehouse():
             new_row = {
                 "QR": qr_code,
                 "Hostname": item['Hostname'],
+                "Serial Number": item.get('Serial Number', ''),
+                "Checked By": item.get('Checked By', ''),
                 "Shelf": item['Shelf'],
                 "Remarks": item['Remarks'],
                 "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -321,7 +341,6 @@ def put_warehouse():
             
             df_items = pd.concat([df_items, pd.DataFrame([new_row])], ignore_index=True)
 
-        # ← This is where the actual save happens
         save_all(df_items, df_shelves)
         
         count = len(staged_items)
@@ -337,7 +356,7 @@ def put_warehouse():
                                           "Common causes:\n"
                                           "• Excel file is open → close it\n"
                                           "• Wrong folder (check working directory)")
-        print("DEBUG ERROR:", e)  # ← shows full traceback in console
+        print("DEBUG ERROR:", e)
      
 def update_item():
     global selected_staged_index
@@ -366,6 +385,8 @@ def update_item():
 
         # Update staged item
         staged_items[index]["Hostname"] = new_hostname
+        staged_items[index]["Serial Number"] = serial_entry.get().strip()
+        staged_items[index]["Checked By"] = checked_by_entry.get().strip()
         staged_items[index]["Shelf"] = shelf_var.get()
         staged_items[index]["Remarks"] = remarks_var.get()
 
@@ -391,6 +412,8 @@ def update_item():
         return
 
     df_items.at[index, "Hostname"] = new_hostname
+    df_items.at[index, "Serial Number"] = serial_entry.get().strip()
+    df_items.at[index, "Checked By"] = checked_by_entry.get().strip()
     df_items.at[index, "Shelf"] = shelf_var.get()
     df_items.at[index, "Remarks"] = remarks_var.get()
 
@@ -431,7 +454,7 @@ def delete_item():
     refresh_all()
 
 def add_shelf():
-    new_shelf = shelf_entry.get().strip()
+    new_shelf = remove_shelf_var.get().strip()
 
     if not new_shelf:
         messagebox.showerror("Error", "Enter shelf name")
@@ -460,7 +483,7 @@ def add_shelf():
 
     messagebox.showinfo("Success", f"Shelf '{new_shelf}' added")
 
-    shelf_entry.delete(0, tk.END)
+    remove_shelf_var.set("")
     update_shelf_dropdown()
 
 def set_shelf_status(new_status):
@@ -494,8 +517,35 @@ def set_shelf_status(new_status):
 def reset_ui():
     # Clear input fields
     hostname_entry.delete(0, tk.END)
-    shelf_var.set("")  # Reset shelf selection
-    remarks_var.set("")  # Reset remarks
+    serial_entry.delete(0, tk.END)
+    checked_by_entry.delete(0, tk.END)
+    shelf_var.set("")
+    remarks_var.set("")
+
+    # Clear Treeview selection
+    for selected_item in tree_warehouse.selection():
+        tree_warehouse.selection_remove(selected_item)
+
+    # Clear status labels
+    status_label.config(text="")
+    search_label.config(text="")
+
+    # Refresh Treeview to show all items
+    show_warehouse()
+
+def reset_shelf_control():
+    shelf_control_var.set("")
+    status_label.config(text="")
+
+def reset_shelf_addition():
+    remove_shelf_var.set("")
+    status_label.config(text="")
+
+def reset_pull_out():
+    pull_item_entry.delete(0, tk.END)
+    pull_reason_entry.delete(0, tk.END)
+    search_label.config(text="")
+    show_warehouse()
 
     # Clear Treeview selection
     for selected_item in tree_warehouse.selection():
@@ -515,16 +565,24 @@ def show_warehouse():
     update_full_shelves_display()
     tree_warehouse.delete(*tree_warehouse.get_children())
     tree_available.pack_forget()
+    tree_pullouts.pack_forget()
     tree_warehouse.pack(fill="both", expand=True)
     
     df_items = load_items()
     
-    # Ensure Date column exists
     if "Date" not in df_items.columns:
         df_items["Date"] = ""
     
     for _, row in df_items.iterrows():
-        tree_warehouse.insert("", "end", values=(row.get("QR", ""), row.get("Hostname", ""), row.get("Shelf", ""), row.get("Remarks", ""), row.get("Date", "")))
+        tree_warehouse.insert("", "end", values=(
+            row.get("QR", ""),
+            row.get("Hostname", ""),
+            row.get("Serial Number", ""),
+            row.get("Checked By", ""),
+            row.get("Shelf", ""),
+            row.get("Remarks", ""),
+            row.get("Date", "")
+        ))
 
 def show_available():
     tree_warehouse.pack_forget()
@@ -560,8 +618,12 @@ def select_item(event):
         values = tree_warehouse.item(selected[0], "values")
         hostname_entry.delete(0, tk.END)
         hostname_entry.insert(0, values[1])
-        shelf_var.set(values[2])
-        remarks_var.set(values[3])
+        serial_entry.delete(0, tk.END)
+        serial_entry.insert(0, values[2])
+        checked_by_entry.delete(0, tk.END)
+        checked_by_entry.insert(0, values[3])
+        shelf_var.set(values[4])
+        remarks_var.set(values[5])
 
         # Auto-fill pull out segment
         pull_item_entry.delete(0, tk.END)
@@ -573,23 +635,30 @@ def search_item():
 
     if not keyword:
         show_warehouse()
-        search_label.config(text="")  # Clear search label
+        search_label.config(text="")
         return
 
-    # Filter items whose hostname contains the keyword
     filtered = df_items[df_items["Hostname"].str.lower().str.contains(keyword, na=False)]
 
     tree_available.pack_forget()
-    tree_pullouts.pack_forget()          # ← add this line
+    tree_pullouts.pack_forget()
     tree_warehouse.pack(fill="both", expand=True)
     tree_warehouse.delete(*tree_warehouse.get_children())
     for _, row in filtered.iterrows():
-        tree_warehouse.insert("", "end", values=(row.get("QR", ""), row.get("Hostname", ""), row.get("Shelf", ""), row.get("Remarks", ""), row.get("Date", "")))
+        tree_warehouse.insert("", "end", values=(
+            row.get("QR", ""),
+            row.get("Hostname", ""),
+            row.get("Serial Number", ""),
+            row.get("Checked By", ""),
+            row.get("Shelf", ""),
+            row.get("Remarks", ""),
+            row.get("Date", "")
+        ))
 
     search_label.config(text=f"Search: {len(filtered)} result(s)")
 
 def search_shelf():
-    shelf_name = shelf_search_entry.get().strip()
+    shelf_name = pull_shelf_var.get().strip()
     df_items = load_items()
 
     if not shelf_name:
@@ -597,14 +666,22 @@ def search_shelf():
         search_label.config(text="")
         return
 
-    # Filter items by shelf
     filtered = df_items[df_items["Shelf"] == shelf_name]
 
     tree_available.pack_forget()
+    tree_pullouts.pack_forget()
     tree_warehouse.pack(fill="both", expand=True)
     tree_warehouse.delete(*tree_warehouse.get_children())
     for _, row in filtered.iterrows():
-        tree_warehouse.insert("", "end", values=(row.get("QR", ""), row.get("Hostname", ""), row.get("Shelf", ""), row.get("Remarks", ""), row.get("Date", "")))
+        tree_warehouse.insert("", "end", values=(
+            row.get("QR", ""),
+            row.get("Hostname", ""),
+            row.get("Serial Number", ""),
+            row.get("Checked By", ""),
+            row.get("Shelf", ""),
+            row.get("Remarks", ""),
+            row.get("Date", "")
+        ))
 
     search_label.config(text=f"Shelf '{shelf_name}': {len(filtered)} item(s)")
 
@@ -670,8 +747,8 @@ def pull_item():
 
     # Get item details before removing
     item_row = match.iloc[0]
-    shelf = item_row["Shelf"]
-    remarks = item_row["Remarks"]
+    shelf = str(item_row.get("Shelf", ""))
+    remarks = str(item_row.get("Remarks", ""))
 
     # Delete QR file
     safe_hostname = hostname.replace(" ", "_")
@@ -688,11 +765,14 @@ def pull_item():
     # Log to pullouts
     new_pullout = {
         "Hostname": hostname,
+        "Serial Number": str(item_row.get("Serial Number", "")),
+        "Checked By": str(item_row.get("Checked By", "")),
         "Shelf": shelf,
         "Remarks": remarks,
         "Pull Reason": reason,
         "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
+
     df_pullouts = pd.concat([df_pullouts, pd.DataFrame([new_pullout])], ignore_index=True)
 
     save_all(df_items, df_shelves, df_pullouts)
@@ -705,208 +785,330 @@ def pull_item():
 
     refresh_all()
 
+
+def undo_pull(event):
+    item_id = tree_pullouts.identify_row(event.y)
+    if not item_id:
+        return
+
+    values = tree_pullouts.item(item_id, "values")
+    if not values:
+        return
+
+    hostname = values[0]
+    shelf = values[1]
+    remarks = values[2]
+
+    confirm = messagebox.askyesno(
+        "Undo Pull",
+        f"Restore '{hostname}' back to the warehouse?\n\nShelf: {shelf}\nRemarks: {remarks}"
+    )
+    if not confirm:
+        return
+
+    df_items = load_items()
+    df_shelves = load_shelves()
+    df_pullouts = load_pullouts()
+
+    if hostname in df_items["Hostname"].values:
+        messagebox.showerror("Error", f"'{hostname}' already exists in warehouse")
+        return
+
+    # Get full record from pullouts sheet
+    match = df_pullouts[df_pullouts["Hostname"] == hostname]
+    if match.empty:
+        messagebox.showerror("Error", f"'{hostname}' not found in pull history")
+        return
+
+    pull_row = match.iloc[0]
+    serial = str(pull_row.get("Serial Number", ""))
+    checked_by = str(pull_row.get("Checked By", ""))
+
+    # Regenerate QR code
+    try:
+        QR_FOLDER = "qr_codes"
+        if not os.path.exists(QR_FOLDER):
+            os.makedirs(QR_FOLDER)
+        qr_code = str(uuid.uuid4())
+        qr_img = qrcode.make(qr_code)
+        safe_hostname = hostname.replace(" ", "_")
+        qr_path = os.path.join(QR_FOLDER, f"{safe_hostname}.png")
+        qr_img.save(qr_path)
+    except Exception as e:
+        messagebox.showwarning("Warning", f"QR code not regenerated: {e}")
+        qr_code = ""
+
+    # Ensure new columns exist
+    for col in ["Serial Number", "Checked By"]:
+        if col not in df_items.columns:
+            df_items[col] = ""
+
+    # Restore directly to warehouse
+    new_row = {
+        "QR": qr_code,
+        "Hostname": hostname,
+        "Serial Number": serial,
+        "Checked By": checked_by,
+        "Shelf": shelf,
+        "Remarks": remarks,
+        "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    df_items = pd.concat([df_items, pd.DataFrame([new_row])], ignore_index=True)
+
+    # Remove from pullouts
+    df_pullouts = df_pullouts[df_pullouts["Hostname"] != hostname].reset_index(drop=True)
+
+    save_all(df_items, df_shelves, df_pullouts)
+
+    messagebox.showinfo("Restored", f"'{hostname}' has been restored to the warehouse")
+    show_pullouts()
+
+def unstage_from_warehouse(event):
+    item_id = tree_warehouse.identify_row(event.y)
+    if not item_id:
+        return
+
+    values = tree_warehouse.item(item_id, "values")
+    if not values:
+        return
+
+    hostname = values[1]
+    serial = values[2]
+    checked_by = values[3]
+    shelf = values[4]
+    remarks = values[5]
+
+    confirm = messagebox.askyesno(
+        "Move to Staging",
+        f"Move '{hostname}' back to staging?\n\nShelf: {shelf}\nRemarks: {remarks}"
+    )
+    if not confirm:
+        return
+
+    if any(item['Hostname'] == hostname for item in staged_items):
+        messagebox.showerror("Error", f"'{hostname}' is already in staging")
+        return
+
+    df_items = load_items()
+    df_shelves = load_shelves()
+
+    safe_hostname = hostname.replace(" ", "_")
+    qr_path = os.path.join("qr_codes", f"{safe_hostname}.png")
+    if os.path.exists(qr_path):
+        try:
+            os.remove(qr_path)
+        except Exception as e:
+            messagebox.showwarning("Warning", f"QR file not deleted: {e}")
+
+    df_items = df_items[df_items["Hostname"] != hostname].reset_index(drop=True)
+    save_all(df_items, df_shelves)
+
+    staged_items.append({
+        "Hostname": hostname,
+        "Serial Number": serial,
+        "Checked By": checked_by,
+        "Shelf": shelf,
+        "Remarks": remarks
+    })
+
+    update_staged_display()
+    show_warehouse()
+    update_shelf_dropdown()
+
+    messagebox.showinfo("Moved", f"'{hostname}' moved back to staging")
+
 # ========== UI SETUP ==========
 
 root = tk.Tk()
 root.title("Warehouse System")
-root.geometry("1100x650")
+root.geometry("1200x700")
 
 # ===== MAIN CONTAINER =====
 main_frame = tk.Frame(root)
 main_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-# ===== TOP SECTION (2 COLUMNS) =====
-top_frame = tk.Frame(main_frame)
-top_frame.pack(fill="x")
+# ===== ROW 1: ITEM MANAGEMENT | SHELF CONTROLS | VIEW =====
+row1_frame = tk.Frame(main_frame)
+row1_frame.pack(fill="x")
 
-# ================= LEFT: INPUT PANEL =================
-input_frame = tk.LabelFrame(top_frame, text="Item Management", padx=10, pady=10)
-input_frame.pack(side="left", fill="both", expand=True, padx=5)
+# --- Item Management ---
+input_frame = tk.LabelFrame(row1_frame, text="Item Management", padx=10, pady=5)
+input_frame.pack(side="left", fill="both", padx=5)
 
 tk.Label(input_frame, text="Hostname").grid(row=0, column=0, sticky="w")
-hostname_entry = tk.Entry(input_frame, width=25)
-hostname_entry.grid(row=0, column=1, pady=5)
+hostname_entry = tk.Entry(input_frame, width=22)
+hostname_entry.grid(row=0, column=1, pady=3)
 
-tk.Label(input_frame, text="Shelf").grid(row=1, column=0, sticky="w")
+tk.Label(input_frame, text="Serial Number").grid(row=1, column=0, sticky="w")
+serial_entry = tk.Entry(input_frame, width=22)
+serial_entry.grid(row=1, column=1, pady=3)
+
+tk.Label(input_frame, text="Checked By").grid(row=2, column=0, sticky="w")
+checked_by_entry = tk.Entry(input_frame, width=22)
+checked_by_entry.grid(row=2, column=1, pady=3)
+
+tk.Label(input_frame, text="Shelf").grid(row=3, column=0, sticky="w")
+
 shelf_var = tk.StringVar()
-shelf_dropdown = ttk.Combobox(input_frame, textvariable=shelf_var, width=22)
-shelf_dropdown.grid(row=1, column=1, pady=5)
+shelf_dropdown = ttk.Combobox(input_frame, textvariable=shelf_var, width=19)
+shelf_dropdown.grid(row=3, column=1, pady=3)
 
-tk.Label(input_frame, text="Remarks").grid(row=2, column=0, sticky="w")
+tk.Label(input_frame, text="Remarks").grid(row=4, column=0, sticky="w")
 remarks_var = tk.StringVar()
 ttk.Combobox(
     input_frame,
     textvariable=remarks_var,
     values=["No Issue", "Minimal", "Defective"],
-    width=22
-).grid(row=2, column=1, pady=5)
+    width=19
+).grid(row=4, column=1, pady=3)
 
-# CRUD Buttons
 crud_frame = tk.Frame(input_frame)
-crud_frame.grid(row=3, column=0, columnspan=2, pady=10)
+crud_frame.grid(row=5, column=0, columnspan=2, pady=5)
 
-tk.Button(crud_frame, text="PUT", command=put_item, width=10).grid(row=0, column=0, padx=3)
-tk.Button(crud_frame, text="UPDATE", command=update_item, width=10).grid(row=0, column=2, padx=3)
-tk.Button(crud_frame, text="↻", command=reset_ui, width=3).grid(row=0, column=4, padx=3)
 
-# Staged Items Indicator
-tk.Label(input_frame, text="Staged Items (Click to Edit)", fg="green", font=("Arial", 9, "bold")).grid(row=4, column=0, columnspan=2, sticky="w")
+tk.Button(crud_frame, text="PUT", command=put_item, width=8).grid(row=0, column=0, padx=3)
+tk.Button(crud_frame, text="UPDATE", command=update_item, width=8).grid(row=0, column=1, padx=3)
+tk.Button(crud_frame, text="↻", command=reset_ui, width=3).grid(row=0, column=2, padx=3)
 
-staged_listbox = tk.Listbox(input_frame, height=6)
-staged_listbox.grid(row=5, column=0, columnspan=2, sticky="we", pady=5)
+tk.Label(input_frame, text="Staged Items (Click to Edit)", fg="green", font=("Arial", 9, "bold")).grid(row=6, column=0, columnspan=2, sticky="w")
+staged_listbox = tk.Listbox(input_frame, height=4, width=32)
+staged_listbox.grid(row=7, column=0, columnspan=2, sticky="we", pady=3)
 staged_listbox.bind("<<ListboxSelect>>", select_staged_item)
 
-tk.Button(input_frame, text="CLEAR ITEMS", command=remove_from_staging, width=20).grid(row=6, column=0, columnspan=2, pady=5)
-tk.Button(input_frame, text="PUT WAREHOUSE", command=put_warehouse, width=20).grid(row=7, column=0, columnspan=2, pady=5)
+staging_btn_frame = tk.Frame(input_frame)
+staging_btn_frame.grid(row=8, column=0, columnspan=2, pady=3)
 
-# ================= RIGHT: SEARCH PANEL =================
-search_frame = tk.LabelFrame(top_frame, text="Search", padx=10, pady=10)
-search_frame.pack(side="right", fill="both", expand=True, padx=5)
+tk.Button(staging_btn_frame, text="CLEAR ITEMS", command=remove_from_staging, width=13).pack(side="left", padx=2)
+tk.Button(staging_btn_frame, text="PUT WAREHOUSE", command=put_warehouse, width=13).pack(side="left", padx=2)
 
-tk.Label(search_frame, text="Hostname").grid(row=0, column=0, sticky="w")
-search_entry = tk.Entry(search_frame, width=20)
-search_entry.grid(row=0, column=1, padx=5, pady=5)
+# --- Shelf Controls (stacked vertically in the middle) ---
+shelf_mid_frame = tk.Frame(row1_frame)
+shelf_mid_frame.pack(side="left", fill="both", expand=True, padx=5)
 
-tk.Button(search_frame, text="🔍", command=search_item, width=2)\
-    .grid(row=0, column=2, padx=2)
+# Shelf Control & Management (two sub-sections)
+shelf_control = tk.LabelFrame(shelf_mid_frame, text="Shelf Control & Management", padx=10, pady=5)
+shelf_control.pack(fill="x")
 
-tk.Label(search_frame, text="Shelf").grid(row=1, column=0, sticky="w")
-shelf_search_entry = tk.Entry(search_frame, width=20)
-shelf_search_entry.grid(row=1, column=1, padx=5, pady=5)
+# -- Status Control --
+status_control_frame = tk.LabelFrame(shelf_control, text="Status Control", padx=8, pady=5)
+status_control_frame.pack(fill="x", pady=(0, 5))
 
-tk.Button(search_frame, text="🔍", command=search_shelf, width=2)\
-    .grid(row=1, column=2, padx=2)
-
-# ===== VIEW SECTION =====
-view_frame = tk.LabelFrame(top_frame, text="View", padx=10, pady=10)
-view_frame.pack(side="right", fill="both", expand=False, padx=5)
-
-tk.Button(view_frame, text="Show Warehouse", command=show_warehouse, width=15)\
-    .pack(side="left", padx=5)
-
-tk.Button(view_frame, text="Shelf Status", command=show_available, width=15)\
-    .pack(side="left", padx=5)
-
-# ===== MIDDLE SECTION =====
-middle_frame = tk.Frame(main_frame)
-middle_frame.pack(fill="x", pady=10)
-
-# Shelf Control
-shelf_control = tk.LabelFrame(middle_frame, text="Shelf Control", padx=10, pady=10)
-shelf_control.pack(side="left", fill="x", expand=True, padx=5)
-
-tk.Label(shelf_control, text="Select Shelf").pack(side="left", padx=5)
 shelf_control_var = tk.StringVar()
-shelf_control_dropdown = ttk.Combobox(shelf_control, textvariable=shelf_control_var, width=25, state="readonly")
+shelf_control_dropdown = ttk.Combobox(status_control_frame, textvariable=shelf_control_var, width=22, state="readonly")
 shelf_control_dropdown.pack(side="left", padx=5)
+tk.Button(status_control_frame, text="SET FULL", command=lambda: set_shelf_status("FULL"), width=10).pack(side="left", padx=3)
+tk.Button(status_control_frame, text="SET AVAILABLE", command=lambda: set_shelf_status("AVAILABLE"), width=12).pack(side="left", padx=3)
+tk.Button(status_control_frame, text="↻", command=reset_shelf_control, width=3).pack(side="left", padx=3)
 
-tk.Button(shelf_control, text="SET FULL",
-          command=lambda: set_shelf_status("FULL"), width=12)\
-    .pack(side="left", padx=5)
 
-tk.Button(shelf_control, text="SET AVAILABLE",
-          command=lambda: set_shelf_status("AVAILABLE"), width=12)\
-    .pack(side="left", padx=5)
 
-tk.Button(view_frame, text="Pull History", command=show_pullouts, width=15)\
-    .pack(side="left", padx=5)
+# -- Add / Remove --
+add_remove_frame = tk.LabelFrame(shelf_control, text="Add / Remove", padx=8, pady=5)
+add_remove_frame.pack(fill="x")
 
-# Add Shelf
-add_frame = tk.LabelFrame(middle_frame, text="Add/Remove Shelf", padx=10, pady=10)
-add_frame.pack(side="left", fill="x", expand=True, padx=5)
-
-tk.Label(add_frame, text="New Shelf").pack(side="left")
-shelf_entry = tk.Entry(add_frame, width=15)
-shelf_entry.pack(side="left", padx=5)
-
-tk.Button(add_frame, text="Add", command=add_shelf).pack(side="left", padx=2)
-
-tk.Label(add_frame, text="Remove").pack(side="left", padx=(10, 0))
 remove_shelf_var = tk.StringVar()
-remove_shelf_dropdown = ttk.Combobox(add_frame, textvariable=remove_shelf_var, width=15, state="readonly")
+remove_shelf_dropdown = ttk.Combobox(add_remove_frame, textvariable=remove_shelf_var, width=22)
 remove_shelf_dropdown.pack(side="left", padx=5)
+tk.Button(add_remove_frame, text="ADD", command=add_shelf).pack(side="left", padx=3)
+tk.Button(add_remove_frame, text="REMOVE", command=remove_shelf).pack(side="left", padx=3)
+tk.Button(add_remove_frame, text="↻", command=reset_shelf_addition, width=3).pack(side="left", padx=3)
 
-tk.Button(add_frame, text="Remove", command=remove_shelf).pack(side="left", padx=2)
+# --- View ---
+view_frame = tk.LabelFrame(row1_frame, text="View", padx=10, pady=5)
+view_frame.pack(side="right", fill="both", padx=5)
 
-# ===== PULL OUT SECTION =====
-pullout_frame = tk.LabelFrame(main_frame, text="Pull Out", padx=10, pady=10)
+tk.Button(view_frame, text="Show Warehouse", command=show_warehouse, width=15).pack(anchor="w", pady=3)
+tk.Button(view_frame, text="Shelf Status", command=show_available, width=15).pack(anchor="w", pady=3)
+tk.Button(view_frame, text="Pull History", command=show_pullouts, width=15).pack(anchor="w", pady=3)
+
+# ===== ROW 2: WAREHOUSE SEARCH/FILTER/PULL =====
+pullout_frame = tk.LabelFrame(main_frame, text="Warehouse", padx=10, pady=8)
 pullout_frame.pack(fill="x", pady=5)
 
-# Row 0 - Selected Item and Pull Reason
-tk.Label(pullout_frame, text="Selected Item:").grid(row=0, column=0, sticky="w", padx=5)
-pull_item_entry = tk.Entry(pullout_frame, width=25)
-pull_item_entry.grid(row=0, column=1, padx=5, pady=3)
 
-tk.Label(pullout_frame, text="Pull Reason:").grid(row=0, column=2, sticky="w", padx=5)
-pull_reason_entry = tk.Entry(pullout_frame, width=25)
-pull_reason_entry.grid(row=0, column=3, padx=5, pady=3)
+# ── Search & Filter ──
+search_filter_frame = tk.LabelFrame(pullout_frame, text="Search & Filter", padx=8, pady=5)
+search_filter_frame.pack(fill="x", pady=(0, 5))
 
-# Row 1 - Filters
-tk.Label(pullout_frame, text="Filter Shelf:").grid(row=1, column=0, sticky="w", padx=5)
+tk.Label(search_filter_frame, text="Search:").pack(side="left", padx=(5, 2))
+search_entry = tk.Entry(search_filter_frame, width=20)
+search_entry.pack(side="left", padx=(0, 2))
+tk.Button(search_filter_frame, text="🔍", command=search_item, width=2).pack(side="left", padx=(0, 15))
+
+tk.Label(search_filter_frame, text="Shelf:").pack(side="left", padx=(5, 2))
 pull_shelf_var = tk.StringVar()
-pull_shelf_dropdown = ttk.Combobox(pullout_frame, textvariable=pull_shelf_var, width=22, state="readonly")
-pull_shelf_dropdown.grid(row=1, column=1, padx=5, pady=3)
+pull_shelf_dropdown = ttk.Combobox(search_filter_frame, textvariable=pull_shelf_var, width=16, state="readonly")
+pull_shelf_dropdown.pack(side="left", padx=(0, 15))
 
-tk.Label(pullout_frame, text="Filter Remarks:").grid(row=1, column=2, sticky="w", padx=5)
+tk.Label(search_filter_frame, text="Remarks:").pack(side="left", padx=(5, 2))
 pull_remarks_var = tk.StringVar()
 ttk.Combobox(
-    pullout_frame,
+    search_filter_frame,
     textvariable=pull_remarks_var,
     values=["No Issue", "Minimal", "Defective"],
-    width=22,
+    width=16,
     state="readonly"
-).grid(row=1, column=3, padx=5, pady=3)
+).pack(side="left", padx=(0, 15))
 
-# Row 2 - Buttons
-btn_frame = tk.Frame(pullout_frame)
-btn_frame.grid(row=2, column=0, columnspan=4, pady=8)
+tk.Button(search_filter_frame, text="FILTER", command=filter_pullouts, width=8).pack(side="left", padx=3)
+tk.Button(search_filter_frame, text="↻", command=clear_pull_filters, width=3).pack(side="left", padx=3)
 
-tk.Button(btn_frame, text="WAREHOUSE PULL", command=pull_item, width=18).pack(side="left", padx=5)
-tk.Button(btn_frame, text="FILTER", command=filter_pullouts, width=10).pack(side="left", padx=5)
-tk.Button(btn_frame, text="↻", command=clear_pull_filters, width=3).pack(side="left", padx=5)
+# ── Pull Out ──
+pull_action_frame = tk.LabelFrame(pullout_frame, text="Pull Out", padx=8, pady=5)
+pull_action_frame.pack(fill="x")
 
-# ===== WAREHOUSING SECTION =====
-# warehousing_frame = tk.LabelFrame(main_frame, text="Warehousing", padx=10, pady=10)
-# warehousing_frame.pack(fill="x", pady=10)
+tk.Label(pull_action_frame, text="Selected Item:").pack(side="left", padx=(5, 2))
+pull_item_entry = tk.Entry(pull_action_frame, width=20)
+pull_item_entry.pack(side="left", padx=(0, 15))
 
-#PENDING FUNCTION
-# tk.Button(warehousing_frame, text="PULL ITEM", command=pull_item, width=20).pack(side="left", padx=10, pady=5)
+tk.Label(pull_action_frame, text="Pull Reason:").pack(side="left", padx=(5, 2))
+pull_reason_entry = tk.Entry(pull_action_frame, width=30)
+pull_reason_entry.pack(side="left", padx=(0, 15))
 
-#tk.Button(warehousing_frame, text="DELETE ITEM", command=delete_item, width=20).pack(side="left", padx=10, pady=5)
+tk.Button(pull_action_frame, text="WAREHOUSE PULL", command=pull_item, width=16).pack(side="left", padx=3)
+tk.Button(pull_action_frame, text="↻", command=reset_pull_out, width=3).pack(side="left", padx=3)
 
-
-
-# ===== STATUS SECTION =====
+# ===== STATUS =====
 status_frame = tk.Frame(main_frame)
 status_frame.pack(fill="x")
 
 full_label = tk.Label(status_frame, text="FULL Shelves: None", fg="red")
-full_label.pack(anchor="w")
+full_label.pack(side="left", padx=10)
 
 search_label = tk.Label(status_frame, text="", fg="blue")
-search_label.pack(anchor="w")
+search_label.pack(side="left", padx=10)
 
 status_label = tk.Label(status_frame, text="", fg="green")
-status_label.pack(anchor="w")
+status_label.pack(side="left", padx=10)
 
 # ===== TABLE =====
 table_frame = tk.Frame(main_frame)
-table_frame.pack(fill="both", expand=True, pady=10)
+table_frame.pack(fill="both", expand=True, pady=5)
 
-# Warehouse Table
+# Warehouse history table view
+
 tree_warehouse = ttk.Treeview(
     table_frame,
-    columns=("Col1", "Col2", "Col3", "Col4", "Col5"),
+    columns=("Col1", "Col2", "Col3", "Col4", "Col5", "Col6", "Col7"),
     show='headings'
 )
 tree_warehouse.heading("Col1", text="QR")
 tree_warehouse.heading("Col2", text="Hostname")
-tree_warehouse.heading("Col3", text="Shelf")
-tree_warehouse.heading("Col4", text="Remarks")
-tree_warehouse.heading("Col5", text="Date")
+tree_warehouse.heading("Col3", text="Serial Number")
+tree_warehouse.heading("Col4", text="Checked By")
+tree_warehouse.heading("Col5", text="Shelf")
+tree_warehouse.heading("Col6", text="Remarks")
+tree_warehouse.heading("Col7", text="Date")
+tree_warehouse.column("Col1", width=200)
+tree_warehouse.column("Col2", width=150)
+tree_warehouse.column("Col3", width=130)
+tree_warehouse.column("Col4", width=120)
+tree_warehouse.column("Col5", width=130)
+tree_warehouse.column("Col6", width=100)
+tree_warehouse.column("Col7", width=150)
 tree_warehouse.bind("<<TreeviewSelect>>", select_item)
+tree_warehouse.bind("<Double-1>", unstage_from_warehouse)
 
-# Available Shelves Table
 tree_available = ttk.Treeview(
     table_frame,
     columns=("Col1", "Col2", "Col3"),
@@ -915,6 +1117,11 @@ tree_available = ttk.Treeview(
 tree_available.heading("Col1", text="Shelf")
 tree_available.heading("Col2", text="Status")
 tree_available.heading("Col3", text="Date_Full")
+tree_available.column("Col1", width=250)
+tree_available.column("Col2", width=150)
+tree_available.column("Col3", width=200)
+
+# Pullouts history table view
 
 tree_pullouts = ttk.Treeview(
     table_frame,
@@ -926,6 +1133,12 @@ tree_pullouts.heading("Col2", text="Shelf")
 tree_pullouts.heading("Col3", text="Remarks")
 tree_pullouts.heading("Col4", text="Pull Reason")
 tree_pullouts.heading("Col5", text="Date")
+tree_pullouts.bind("<Double-1>", undo_pull)
+tree_pullouts.column("Col1", width=180)
+tree_pullouts.column("Col2", width=150)
+tree_pullouts.column("Col3", width=100)
+tree_pullouts.column("Col4", width=250)
+tree_pullouts.column("Col5", width=160)
 
 # ===== INIT =====
 update_shelf_dropdown()
