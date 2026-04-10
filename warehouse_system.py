@@ -300,6 +300,91 @@ def put_item():
     
     update_staged_display()
 
+def generate_qr_pdf(items_batch):
+    from fpdf import FPDF
+
+    PAGE_W = 210
+    LABEL_W, LABEL_H = 54, 58  # slightly taller for breathing room
+    MARGIN_X = 12
+    MARGIN_Y = 10
+    COLS = 3
+    GAP_X = (PAGE_W - (COLS * LABEL_W) - (2 * MARGIN_X)) / (COLS - 1)
+    ROW_GAP = 3
+
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_auto_page_break(auto=False)
+    pdf.add_page()
+
+    col = 0
+    row = 0
+
+    for item in items_batch:
+        x = MARGIN_X + col * (LABEL_W + GAP_X)
+        y = MARGIN_Y + row * (LABEL_H + ROW_GAP)
+
+        if y + LABEL_H > 297 - MARGIN_Y:
+            pdf.add_page()
+            col = 0
+            row = 0
+            x = MARGIN_X
+            y = MARGIN_Y
+
+        # Label border
+        pdf.set_draw_color(150, 150, 150)
+        pdf.rect(x, y, LABEL_W, LABEL_H)
+
+        # QR image centered
+        safe_hostname = item['Hostname'].replace(" ", "_")
+        qr_path = os.path.join("qr_codes", f"{safe_hostname}.png")
+        if os.path.exists(qr_path):
+            qr_size = 20
+            qr_x = x + (LABEL_W - qr_size) / 2
+            qr_y = y + 3
+            pdf.image(qr_path, x=qr_x, y=qr_y, w=qr_size, h=qr_size)
+
+        # Fixed positions for label and value columns
+        label_x = x + 2
+        value_x = x + 19
+        text_y = y + 26
+        line_h = 4.8
+
+        fields = [
+            ("Hostname:",   str(item.get("Hostname", ""))),
+            ("Serial No:",  str(item.get("Serial Number", ""))),
+            ("Checked By:", str(item.get("Checked By", ""))),
+            ("Shelf:",      str(item.get("Shelf", ""))),
+            ("Remarks:",    str(item.get("Remarks", ""))),
+            ("Date:",       datetime.now().strftime("%Y-%m-%d")),
+        ]
+
+        for label, value in fields:
+            # Bold label at fixed x
+            pdf.set_font("Helvetica", style="B", size=5.5)
+            pdf.set_xy(label_x, text_y)
+            pdf.cell(17, line_h, label, ln=0)
+
+            # Value at fixed x regardless of column
+            pdf.set_font("Helvetica", size=5.5)
+            pdf.set_xy(value_x, text_y)
+            pdf.cell(LABEL_W - 21, line_h, value[:22], ln=0)
+
+            text_y += line_h
+
+        col += 1
+        if col >= COLS:
+            col = 0
+            row += 1
+
+    pdf_folder = "qr_labels"
+    if not os.path.exists(pdf_folder):
+        os.makedirs(pdf_folder)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    pdf_path = os.path.join(pdf_folder, f"qr_labels_{timestamp}.pdf")
+    pdf.output(pdf_path)
+
+    return pdf_path
+
 def put_warehouse():
     if not staged_items:
         messagebox.showerror("Error", "No staged items to put")
@@ -324,7 +409,15 @@ def put_warehouse():
 
         for item in staged_items:
             qr_code = str(uuid.uuid4())
-            qr_img = qrcode.make(qr_code)
+            qr_data = (
+                f"Hostname: {item['Hostname']}\n"
+                f"Serial Number: {item.get('Serial Number', '')}\n"
+                f"Checked By: {item.get('Checked By', '')}\n"
+                f"Shelf: {item['Shelf']}\n"
+                f"Remarks: {item['Remarks']}\n"
+                f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            qr_img = qrcode.make(qr_data)
             safe_hostname = item['Hostname'].replace(" ", "_")
             qr_path = os.path.join(QR_FOLDER, f"{safe_hostname}.png")
             qr_img.save(qr_path)
@@ -342,12 +435,21 @@ def put_warehouse():
             df_items = pd.concat([df_items, pd.DataFrame([new_row])], ignore_index=True)
 
         save_all(df_items, df_shelves)
-        
+
+        # Generate PDF labels
         count = len(staged_items)
+
+        try:
+            pdf_path = generate_qr_pdf(staged_items)
+            pdf_msg = f"\nQR labels saved to:\n{pdf_path}"
+        except Exception as pdf_err:
+            pdf_msg = f"\nPDF generation failed: {pdf_err}"
+            print("PDF ERROR:", pdf_err)
+
         staged_items.clear()
-        
-        messagebox.showinfo("Success", f"{count} item(s) added to warehouse")
-        
+
+        messagebox.showinfo("Success", f"{count} item(s) added to warehouse{pdf_msg}")
+
         update_staged_display()
         refresh_all()
 
@@ -917,6 +1019,109 @@ def unstage_from_warehouse(event):
 
     messagebox.showinfo("Moved", f"'{hostname}' moved back to staging")
 
+def open_label_manager():
+    manager = tk.Toplevel(root)
+    manager.title("QR Label Manager")
+    manager.geometry("520x350")
+    manager.resizable(False, False)
+
+    tk.Label(manager, text="QR Label Files", font=("Arial", 10, "bold")).pack(anchor="w", padx=10, pady=(10, 0))
+
+    # Table
+    table_frame_m = tk.Frame(manager)
+    table_frame_m.pack(fill="both", expand=True, padx=10, pady=5)
+
+    tree_labels = ttk.Treeview(
+        table_frame_m,
+        columns=("File", "Date", "Size"),
+        show="headings",
+        height=12
+    )
+    tree_labels.heading("File", text="Filename")
+    tree_labels.heading("Date", text="Created")
+    tree_labels.heading("Size", text="Size")
+    tree_labels.column("File", width=260)
+    tree_labels.column("Date", width=150)
+    tree_labels.column("Size", width=70)
+    tree_labels.pack(fill="both", expand=True)
+
+    def load_label_files():
+        tree_labels.delete(*tree_labels.get_children())
+        pdf_folder = "qr_labels"
+        if not os.path.exists(pdf_folder):
+            return
+
+        files = sorted(
+            [f for f in os.listdir(pdf_folder) if f.endswith(".pdf")],
+            reverse=True
+        )
+
+        now = datetime.now()
+
+        for f in files:
+            full_path = os.path.join(pdf_folder, f)
+            size_kb = round(os.path.getsize(full_path) / 1024, 1)
+
+            # Parse timestamp from filename
+            try:
+                parts = f.replace("qr_labels_", "").replace(".pdf", "")
+                file_dt = datetime.strptime(parts, "%Y-%m-%d_%H-%M-%S")
+                delta = now - file_dt
+                if delta.days == 0:
+                    age = "Today"
+                elif delta.days == 1:
+                    age = "1 day ago"
+                else:
+                    age = f"{delta.days} days ago"
+                date_str = f"{file_dt.strftime('%Y-%m-%d %H:%M')}  ({age})"
+            except:
+                date_str = "Unknown"
+
+            tree_labels.insert("", "end", values=(f, date_str, f"{size_kb} kb"))
+
+    def open_selected():
+        selected = tree_labels.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "Select a file to open", parent=manager)
+            return
+        filename = tree_labels.item(selected[0], "values")[0]
+        full_path = os.path.join("qr_labels", filename)
+        if os.path.exists(full_path):
+            os.startfile(full_path)
+        else:
+            messagebox.showerror("Error", "File not found", parent=manager)
+
+    def clear_selected():
+        selected = tree_labels.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "Select a file to clear", parent=manager)
+            return
+        filename = tree_labels.item(selected[0], "values")[0]
+        full_path = os.path.join("qr_labels", filename)
+        confirm = messagebox.askyesno(
+            "Confirm Clear",
+            f"Delete '{filename}'?",
+            parent=manager
+        )
+        if not confirm:
+            return
+        try:
+            os.remove(full_path)
+            load_label_files()
+            messagebox.showinfo("Cleared", f"'{filename}' deleted", parent=manager)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not delete file:\n{e}", parent=manager)
+
+    # Buttons
+    btn_frame_m = tk.Frame(manager)
+    btn_frame_m.pack(pady=8)
+
+    tk.Button(btn_frame_m, text="OPEN", command=open_selected, width=12).pack(side="left", padx=5)
+    tk.Button(btn_frame_m, text="CLEAR", command=clear_selected, width=12).pack(side="left", padx=5)
+    tk.Button(btn_frame_m, text="REFRESH", command=load_label_files, width=12).pack(side="left", padx=5)
+
+    load_label_files()
+
 # ========== UI SETUP ==========
 
 root = tk.Tk()
@@ -1020,6 +1225,8 @@ view_frame.pack(side="right", fill="both", padx=5)
 tk.Button(view_frame, text="Show Warehouse", command=show_warehouse, width=15).pack(anchor="w", pady=3)
 tk.Button(view_frame, text="Shelf Status", command=show_available, width=15).pack(anchor="w", pady=3)
 tk.Button(view_frame, text="Pull History", command=show_pullouts, width=15).pack(anchor="w", pady=3)
+tk.Button(view_frame, text="QR Label Manager", command=open_label_manager, width=15).pack(anchor="w", pady=3)
+
 
 # ===== ROW 2: WAREHOUSE SEARCH/FILTER/PULL =====
 pullout_frame = tk.LabelFrame(main_frame, text="Warehouse", padx=10, pady=8)
